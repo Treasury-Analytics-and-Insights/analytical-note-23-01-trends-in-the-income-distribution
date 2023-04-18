@@ -1,0 +1,2510 @@
+---
+title: "Treasury Analytical Note : Trends in the household income distribution: 2007-2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    toc_depth: 4
+    theme: lumen
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=10, fig.height=6)
+
+###########################################################
+# Library
+###########################################################
+library(data.table)
+library(ggplot2)
+library(scales)
+library(knitr)
+library(kableExtra)
+library(patchwork)
+library(plotly)
+library(ggiraph)
+library(viridis)
+library(RColorBrewer)
+source("IncomeDistribution_Utilities.R")
+
+###########################################################
+# Load data
+###########################################################
+
+######################################################
+# Quantiles
+quantiles <- fread("data/Income_Distribution_PersonBHC_Outputs.csv")
+quantiles[, Value := as.numeric(Value)]
+quantiles[, Population := as.numeric(Population)]
+quantiles_AHC <- fread("data/Income_Distribution_PersonAHC_Outputs.csv")
+quantiles_AHC[, Value := as.numeric(Value)]
+quantiles_AHC[, Population := as.numeric(Population)]
+income_types <- quantiles[, unique(Value_type)]
+grouping_types <- quantiles[, unique(Group_type)]
+
+######################################################
+# Histograms
+histograms_BHC <- fread("data/histogram_personlevel_BHC.csv")
+histograms_BHC <- unique(histograms_BHC)
+histograms_BHC[, Income := Vi]
+histograms_BHC_householdlevel <- fread("data/histogram_householdlevel_BHC.csv")
+histograms_BHC_householdlevel[, Income := Vi]
+histograms_BHC[, Year_group := paste(Year)]
+
+# AHC has smaller sample sizes
+histograms_AHC <- fread("data/histogram_personlevel_AHC.csv")
+histograms_AHC <- unique(histograms_AHC)
+
+histograms_AHC[, Income := Vi]
+# combine smaller sample years
+histograms_AHC[, Year_group := paste(Year)]
+histograms_AHC[Year %in% c(2007, 2008, 2009), 
+               ':=' (Year = 2007, 
+                     Year_group = "2007-2009")]
+histograms_AHC[Year %in% c(2010, 2011, 2012), 
+               ':=' (Year = 2011, 
+                     Year_group = "2010-2012")]
+histograms_AHC[Year %in% c(2013, 2014, 2015), 
+               ':=' (Year = 2014, 
+                     Year_group = "2013-2015")]
+histograms_AHC[Year %in% c(2017, 2018), 
+               ':=' (Year = 2017,
+                     Year_group = "2017-2018")]
+
+total <- histograms_AHC[, 
+                        .(All_Total = max(All_Total), 
+                          Year_group = Year_group[1]), 
+                        by = Year]
+total <- total[, .(All_Total_year_group = sum(All_Total)), 
+               by = Year_group]
+
+histograms_AHC <- merge(histograms_AHC, total, by = "Year_group")
+histograms_AHC[, Contribution := All_Total/All_Total_year_group ]
+histograms_AHC <- 
+  histograms_AHC[, .(Population = sum(Population*Contribution), 
+                     Group_Total = sum(Group_Total*Contribution), 
+                     All_Total = sum(All_Total*Contribution)), 
+                 by = .(Year_group, Income, Group, Value_type, Group_type, Year)]
+
+histograms_all <- rbind(histograms_AHC[, Type := "After housing cost"], 
+                        histograms_BHC[, Type := "Before housing cost"],  
+                        fill=TRUE)
+histograms_all[Group == "3-Apr", Group:="3-4"]
+histograms_all[Group == "5-Nov", Group:="5-11"]
+
+###########################################################
+# Load summary statistics
+###########################################################
+summary_stats <- fread("data/Summary_stats.csv")
+summary_stats <- melt(summary_stats, 
+                      id.vars = "Year")
+setnames(summary_stats, c("Year", "Statistic", "Value"))
+summary_stats[, Value := as.numeric(gsub(",", "", Value))]
+
+###########################################################
+# Color palettes, formatting etc
+###########################################################
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+hhtypePalette <- c("All" = cbPalette[1], 
+          "Multi-adult with children" = cbPalette[2], 
+          "Single with children" =  cbPalette[3],
+          "Multi-adult" =  cbPalette[4],
+          "Single" =  cbPalette[5],
+          "Multi-adult, 65+" = cbPalette[6],
+          "Single, 65+" = cbPalette[7])
+
+hhbentypePalette <- brewer.pal(n = 8, name = "Paired")
+names(hhbentypePalette) <- 
+  c("Beneficiary : Multi-adult", 
+   "Beneficiary : Multi-adult with children",
+   "Beneficiary : Single", 
+   "Beneficiary : Single with children",
+   "Non beneficiary : Multi-adult",
+   "Non beneficiary : Multi-adult with children",
+   "Non beneficiary : Single",
+   "Non beneficiary : Single with children")
+
+years <- histograms_BHC[, unique(Year)]
+yearsPalette <- viridis(15, end=0.75)
+names(yearsPalette) <- years
+
+
+layout_ggplotly <- function(gg, x = -0.02, y = -0.02){
+  gg[['x']][['layout']][['annotations']][[1]][['y']] <- x
+  gg[['x']][['layout']][['annotations']][[2]][['x']] <- y
+  gg
+}
+
+add_income_bands <- function(histogram_data){
+  histogram_data[, min := dollar(Income), by = .(Year, Group, Value_type)]
+  histogram_data[, max := dollar(shift(Income,-1)), by = .(Year, Group, Value_type)]
+  histogram_data[, Income_band := paste0(min, "-", max)]
+}
+
+
+```
+
+Note: This report is best viewed with Google Chrome. Please press and hold the “Ctrl” key, and then press the “-” or “+” keys on the keyboard, to zoom-out or zoom-in.
+
+# Summary 
+
+These detailed outputs accompany the Treasury Analytical Note "Trends in the household income distribution: 2007-2021" https://www.treasury.govt.nz/publications/an/an-23-01
+
+This note lays the groundwork for future research by presenting comprehensive data on household income distributions over the past 14 years. It goes beyond headline statistics on incomes, inequality, and poverty by using unit record data from Stats NZ to supplement existing outputs and reports, such as Perry (2019, 2022). Through visual representations, this note presents household income distributions for various types of households from 2007 to 2021, shedding light on trends and patterns. Additionally, the note delves into the impact of an aging population by creating a counterfactual distribution based on 2007 age demographics, allowing for further investigation into this important demographic shift. The detailed data and analyses presented in this note serve as a valuable foundation for future work in understanding household incomes in New Zealand.
+
+# Data description 
+
+The unit record data used in this analysis were provided by Stats NZ and cover the period from 2007 to 2021. This is the same dataset that is used by Stats NZ to create child poverty and household income statistics. 
+
+For 2019–2021, the data are derived from the Household Economic Survey (HES) linked to administrative income data in the Integrated Data Infrastructure (IDI). Stats NZ increased the size of HES to around 20,000 households in 2019 as part of their work to improve Child Poverty measurement (Stats NZ, 2022).
+
+For years prior to 2019, this analysis uses data that was derived by Stats NZ to produce a baseline for the Child Poverty reporting regime. In these years, the HES was a much smaller survey of around 3,500–5,000 households. For before housing cost incomes, the data comprise HES combined with the Household Labour Force Survey (HLFS) linked to administrative data in the IDI. After housing cost incomes are only derived from HES combined with administrative data because HLFS does not contain information on housing costs. 
+
+This means that there is a series break in 2019, due to different data sources and sample sizes. However, the data show consistent trends in the distributions and statistics of interest to this paper over this time period.  
+
+
+## IDI Disclaimer
+
+These results are not official statistics. They have been created for research purposes from the Integrated Data Infrastructure (IDI) which is carefully managed by Stats NZ. For more information about the IDI please visit https://www.stats.govt.nz/integrated-data/. The results are based in part on tax data supplied by Inland Revenue to Stats NZ under the Tax Administration Act 1994 for statistical purposes. Any discussion of data limitations or weaknesses is in the context of using the IDI for statistical purposes, and is not related to the data’s ability to support Inland Revenue’s core operational requirements.
+
+
+# Results
+
+## Equivalised income 
+```{r echo=FALSE}
+
+Eq_Income <- data.table(Household = "1 person aged at least 14", EqFactor=1, Income = seq(0,160000, 1000))
+Eq_Income <- rbind(Eq_Income, 
+                   data.table(Household = "2 people aged at least 14", EqFactor=1.5,  Income = seq(0,160000, 1000)))
+                   
+Eq_Income <- rbind(Eq_Income, 
+                   data.table(Household = "1 person aged at least 14, 1 child under 14", EqFactor=1.3, Income = seq(0,160000, 1000)))
+Eq_Income <- rbind(Eq_Income, 
+                   data.table(Household = "2 people aged at least 14, 1 child under 14", EqFactor=1.8, Income = seq(0,160000, 1000)))
+Eq_Income <- rbind(Eq_Income, 
+                   data.table(Household = "3 people aged at least 14, 1 child under 14", EqFactor=2.3, Income = seq(0,160000, 1000)))
+Eq_Income <- rbind(Eq_Income, 
+                   data.table(Household = "1 person aged at least 14, 2 children under 14", EqFactor=1.6, Income = seq(0,160000, 1000)))
+Eq_Income <- rbind(Eq_Income, 
+                   data.table(Household = "2 people aged at least 14, 2 children under 14", EqFactor=2.1, Income = seq(0,160000, 1000)))
+Eq_Income <- rbind(Eq_Income, 
+                   data.table(Household = "3 people aged at least 14, 2 children under 14", EqFactor=2.6, Income = seq(0,160000, 1000)))
+
+p1 <- ggplot(Eq_Income, 
+       aes(x=Income, 
+           y=Income/EqFactor, 
+           color=Household, 
+           group=Household,
+           text = paste0(Household, 
+                         "\nIncome: ", dollar(Income), 
+                         "\nEq Income: ", dollar(Income/EqFactor), 
+                         "\nEq Factor: ", EqFactor))) +
+  geom_line() +
+  theme_bw() +
+  scale_x_continuous(labels=dollar, 
+                     name="Income") + 
+  scale_y_continuous(labels=dollar, 
+                     name="Equivalised Income") + 
+  ggtitle("Estimate your equivalised income")
+
+
+
+ggplotly(p1, tooltip="text") 
+
+# # plot for note
+# display_text <-
+#   paste0("If you have a household\nincome of $100,000,\ntwo parents, and two children\naged 15 and 12, then your\nequivalised income is\n",
+#          dollar(100000/2.3))
+# 
+# p1 +
+#   annotate(
+#     geom = "curve",
+#     x = 50000, y = 100000,
+#     xend = 100000, yend = 100000/2.3,
+#     curvature = .3, arrow = arrow(length = unit(2, "mm"))
+#   ) +
+#   annotate(geom = "text", x = 10000, y = 120000, label = display_text, hjust = "left") +
+#   annotate("segment",
+#            x = 100000, xend = 0, y =  100000/2.3, yend =  100000/2.3,
+#            colour = "#C77CFF",
+#            arrow = arrow(length = unit(2, "mm")))  +
+#   annotate("segment",
+#            x = 100000, xend = 100000, y =  0, yend =  100000/2.3,
+#            colour = "#C77CFF")
+
+
+```
+
+
+## Household Equivalised Income Distributions {.tabset}
+### Distributions between 2007 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- histograms_all[Group_type %in% c("All") & Value_type %in% c("HEDI_BHC_2022dollars", "HEDI_AHC_2022dollars" )]
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+add_income_bands(plot_data)
+
+p <- 
+  ggplot(plot_data, 
+         aes(x=Income, 
+             y=Proportion, 
+             color=Year,
+             group=Year_group, 
+             text = paste0("Income band : ", Income_band, 
+                           "\nProportion : ", percent(Proportion, accuracy=0.01),
+                           "\nYear : ", Year_group))) + 
+  geom_line(alpha=0.3, size=0.8) + 
+  geom_line(data = 
+              plot_data[Year %in% c(2007, 2014, 2021)],
+            aes(x=Income, 
+                y=Proportion, 
+                color=Year,
+                group=Year_group), 
+            size=1) + 
+  theme_bw() + 
+  facet_wrap(.~ Type) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF"), 
+        legend.position = "bottom") + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Change in distributions between 2007 and 2021")
+
+  
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20), 
+         legend=list(font=list(size=10)))
+
+```
+
+### Distributions in 2007, 2014, and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- histograms_all[Group_type %in% c("All") & 
+                              Value_type %in% c("HEDI_BHC_2022dollars", "HEDI_AHC_2022dollars") & 
+                              Year %in% c(2007, 2014, 2021)]
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+add_income_bands(plot_data)
+
+
+p <- 
+  ggplot(plot_data, 
+       aes(x=Income, 
+           y=Proportion, 
+           fill=Year,
+           group=Year_group, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year_group))) + 
+    geom_col(alpha=0.5, position="identity") + 
+    theme_bw() + 
+    facet_wrap(.~ Type) + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+          strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF"), 
+          legend.position = "bottom") + 
+    scale_y_continuous(name="Proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 250000), 
+                  name="HEDI ($2022, log scale)") + 
+    scale_fill_manual(name="",values=yearsPalette[c('2007', '2014', '2021')])+  
+    ggtitle("Distributions in 2007, 2014, and 2021")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+```
+
+### Changes over seven years
+
+```{r echo=FALSE, warning=FALSE}
+
+Change_BHC <- sevenyear_comparisons(histograms_BHC[Group_type %in% c("All") & 
+                                                     Value_type == "HEDI_BHC_2022dollars"], 
+                                type="Year")
+Change_AHC <- sevenyear_comparisons(histograms_AHC[Group_type %in% c("All") & 
+                                                     Value_type == "HEDI_AHC_2022dollars"], 
+                                type="Year_group")
+
+Change_all <- rbind(Change_AHC[, Type := "After housing cost"], 
+                    Change_BHC[, Type := "Before housing cost"], 
+                    fill=TRUE)
+
+Change_all[, ':=' (Income = exp(Income), 
+                   Year = factor(Year))]
+
+add_income_bands(Change_all)
+
+
+
+p <- 
+  ggplot(Change_all[Year != 2007], 
+       aes(x=Income, 
+           y= Diff_prop_population, 
+           color=Year,
+           group=Year,
+           text = paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Diff_prop_population,3), scientific=FALSE), " pp",
+                         "\nYear : ", Year_group))) +
+    geom_step(size=1) +
+    geom_hline(yintercept = 0) + 
+    facet_grid(.~Type) + 
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+    scale_y_continuous(name="Change in proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 250000), 
+                  name="HEDI ($2022, log scale)") + 
+
+    scale_color_manual(name="",values=yearsPalette[c( '2014', '2021')])+  
+    ggtitle("Seven year change in distributions - Comapre 2014 with 2007, and 2007 with 2021")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+```
+
+### Unit of analysis - person vs household
+
+
+```{r echo=FALSE, warning=FALSE}
+
+person_level <- histograms_BHC[Group_type %in% c("All") & 
+                                 Value_type == "HEDI_BHC_2022dollars"]
+household_level <- histograms_BHC_householdlevel[Group_type %in% c("All") & 
+                                  Value_type == "HEDI_BHC_2022dollars"]
+
+plot_data <- rbind(person_level[, Type:= "Person"], 
+                   household_level[, Type := "Household"],
+                   fill=TRUE)
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+add_income_bands(plot_data)
+
+
+
+p <- ggplot(plot_data[Year %in% c(2007, 2014, 2021)], 
+       aes(x=Income, 
+           y=Proportion,
+           color=Year, 
+           group=paste(Year, Type), 
+           linetype=Type, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year, 
+                         "\nUnit of analysis : ", Type))) + 
+  geom_line(size=1) + 
+  facet_wrap(.~Year) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion in this income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 200000), 
+                name="Household equivalised disposable income ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Comparing BHC household and person level distributions between 2007 and 2021")
+
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+
+
+
+
+
+
+## Household Equivalised Income - Summary Statistics {.tabset}
+```{r echo=FALSE, warning=FALSE}
+
+plot_summary_stats <- copy(summary_stats)
+plot_summary_stats[, Income_type := "BHC"]
+plot_summary_stats[Statistic %like% "AHC", Income_type := "AHC"]
+plot_summary_stats[, Indicator_type := "$Nominal"]
+plot_summary_stats[Statistic %like% "Gini", Indicator_type := "Gini"]
+plot_summary_stats[Statistic %like% "Real", Indicator_type := "$2022"]
+plot_summary_stats[, Statistic_type := "Mean"]
+plot_summary_stats[Statistic %like% "Median", Statistic_type := "Median"]
+plot_summary_stats[Statistic %like% "Gini", Statistic_type := "Gini"]
+plot_summary_stats[Statistic %like% "Inflator", Statistic_type := "Inflator"]
+
+```
+
+### Deciles
+```{r echo=FALSE, warning=FALSE}
+# load deciles in $2022 
+BHC_deciles <- 
+  quantiles[Quantile %in% c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9) & 
+              Group == "All" & Value_type == "HEDI_BHC_2022dollars" ]
+
+AHC_deciles <- 
+  quantiles_AHC[Quantile %in% c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)  & 
+                  Group == "All" & Value_type == "HEDI_AHC_2022dollars" ]
+
+deciles <- rbind(BHC_deciles[, ':=' (Income_type = "BHC", 
+                                     Index = NULL, 
+                                     Statistic = paste("Decile", 10 * Quantile))], 
+                 AHC_deciles[, ':=' (Income_type = "AHC", 
+                                     Index = NULL, 
+                                     Statistic = paste("Decile", 10 * Quantile))], 
+                 fill=T)
+deciles <- deciles[, .(Year, Income_type, Statistic, Value, Group)]
+
+plot_levels <- copy(deciles)
+# add mean 
+plot_levels <- rbind(plot_levels, 
+                     plot_summary_stats[Statistic_type == "Mean" & Indicator_type == "$2022", 
+                                        .(Year, Income_type, Statistic = Statistic_type, Value, Group="All")], 
+                     fill=T)
+plot_levels[Income_type == "BHC", Income_type := "Before housing cost"]
+plot_levels[Income_type == "AHC", Income_type := "After housing cost"]
+
+ggplot(plot_levels,
+       aes(x=Year,
+           y=Value,
+           color=Statistic)) +
+  geom_line() + 
+  geom_line(data = plot_levels[Statistic %in% c("Mean", "Decile 5")],
+            aes(x=Year,
+                y=Value,
+                color=Statistic), 
+            size=1.5) + 
+  facet_grid(.~Income_type,scales="free") + 
+  theme_bw() +   
+  theme(strip.background = element_rect(colour="#000000", fill="#FFFFFF")) + 
+  scale_y_continuous(labels=dollar_format(), 
+                     name="") 
+```
+
+### Inequality
+
+```{r echo=FALSE, warning=FALSE}
+
+ginis <- plot_summary_stats[Statistic_type == "Gini" , 
+                            .(Year, Income_type, Statistic = Statistic_type, Value, Group="All")]
+
+plot_inequality_metrics(deciles, ginis)
+
+```
+
+
+### Average changes in deciles
+
+
+```{r echo=FALSE, warning=FALSE}
+
+average_annual_change_deciles(deciles)
+
+fwrite(deciles, "plots/AN/decile_averge_changes.csv")
+
+
+```
+
+
+## Household types {.tabset}
+### Distributions of each household type in 2007, 2014, 2021
+
+```{r echo=FALSE, warning=FALSE}
+########################
+# prepare plot data
+########################
+data_bhc <- 
+  histograms_all[Group_type %in% c("HH_Type") & 
+                   Value_type %in% c("HEDI_BHC_2022dollars") & 
+                   Year %in% c(2007, 2014, 2021)]
+data_bhc[, Population := 100*Population/All_Total]
+data_bhc[, Year_group := paste(Year)]
+data_bhc <- dcast(data_bhc, Year_group + Income ~ Group, value.var="Population")
+data_bhc[, Income := exp(Income)]
+data_bhc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_bhc, 
+         gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_bhc))))))
+
+data_ahc <- 
+  histograms_all[Group_type %in% c("HH_Type") & 
+                   Value_type %in% c("HEDI_AHC_2022dollars") & 
+                   Year %in% c(2007, 2014, 2021)]
+data_ahc[, Population := 100*Population/All_Total]
+data_ahc <- dcast(data_ahc, Year_group + Income ~ Group, value.var="Population")
+data_ahc[, Income := exp(Income)]
+
+
+setnames(data_ahc, 
+         gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_ahc))))))
+
+########################
+# plot function
+########################
+plot_lines_hhtype <- function(data_to_plot, year, plot_title, show_legend=F){
+  p <- 
+    plot_ly(data_to_plot[Year_group==year & Income>=5000],
+            showlegend=show_legend) %>% 
+      add_lines(x = ~Income, y=~Multi_adult, 
+               legendgroup = "Multi-adult", name="Multi-adult", 
+               color=I(hhtypePalette["Multi-adult"])) %>%
+      add_lines(x = ~Income, y=~Multi_adult_with_children, 
+               legendgroup = "Multi-adult with children", name="Multi-adult with children", 
+               color=I(hhtypePalette["Multi-adult with children"])) %>%
+      add_lines(x = ~Income, y=~Single, 
+               legendgroup = "Single", name="Single", 
+               color=I(hhtypePalette["Single"])) %>%
+      add_lines(x = ~Income, y=~Single_with_children, 
+               legendgroup = "Single with children", name="Single with children",
+               color=I(hhtypePalette["Single with children"])) %>%
+      add_lines(x = ~Income, y=~Multi_adult_65, 
+               legendgroup = "Multi-adult 65+", name="Multi-adult 65+",
+               color=I(hhtypePalette["Multi-adult, 65+"])) %>%
+      add_lines(x = ~Income, y=~Single_65, 
+               legendgroup = "Single 65+", name="Single 65+", 
+               color=I(hhtypePalette["Single, 65+"])) %>%
+      layout(annotations = list(x = 0.1 , y = 0.95, 
+                                text = plot_title, 
+                                showarrow = F, 
+                                xref='paper', yref='paper'),
+             xaxis=list(type="log", 
+                        ticktext = list("$10k", "$20k", "$40k", "$80k", "$160k"), 
+                        tickvals = list(10000, 20000, 40000, 80000, 160000),
+                        tickmode = "array", 
+                        hoverformat = '$,.0f'), 
+             yaxis=list(title="% of people", 
+                        ticksuffix = "%",
+                        hoverformat = ".1f"))
+  return(p)
+}
+
+########################
+# plots
+########################
+bhc_2007 <- plot_lines_hhtype(data_bhc, "2007", "BHC, 2007", TRUE)
+bhc_2014 <- plot_lines_hhtype(data_bhc, "2014", "BHC, 2014")
+bhc_2021 <- plot_lines_hhtype(data_bhc, "2021", "BHC, 2021")
+ahc_2007 <- plot_lines_hhtype(data_ahc, "2007-2009", "AHC, 2007-2009")
+ahc_2014 <- plot_lines_hhtype(data_ahc, "2013-2015", "AHC, 2013-2015")
+ahc_2021 <- plot_lines_hhtype(data_ahc, "2021", "AHC, 2021")
+
+
+subplot(ahc_2007, bhc_2007, 
+        ahc_2014, bhc_2014, 
+        ahc_2021, bhc_2021, 
+        shareX = T, shareY=T, nrows=3)
+
+
+
+```
+
+
+### Number of people by household type and income
+
+```{r echo=FALSE, warning=FALSE}
+
+########################
+# prepare plot data
+########################
+
+data_bhc <- 
+  histograms_all[Group_type %in% c("HH_Type") & 
+                   Value_type %in% c("HEDI_BHC_2022dollars") & 
+                   Year %in% c(2007, 2014, 2021)]
+data_bhc[, Year_group := paste(Year)]
+data_bhc <- dcast(data_bhc, Year_group + Income ~ Group, value.var="Population")
+data_bhc[, Income := exp(Income)]
+data_bhc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_bhc, 
+         gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_bhc))))))
+
+data_ahc <- 
+  histograms_all[Group_type %in% c("HH_Type") & 
+                   Value_type %in% c("HEDI_AHC_2022dollars") & 
+                   Year %in% c(2007, 2014, 2021)]
+data_ahc[Year_group %in% c("2007-2009","2013-2015"), Population := Population/3]
+data_ahc <- dcast(data_ahc, Year_group + Income ~ Group, value.var="Population")
+data_ahc[, Income := exp(Income)]
+
+data_ahc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_ahc, 
+         gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_ahc))))))
+
+########################
+# plot function
+########################\
+plot_bars_hhtype <- function(data_to_plot, year, plot_title, show_legend=F){
+  p <- 
+    plot_ly(data_to_plot[Year_group==year & Income>=1000], showlegend=show_legend) %>% 
+      add_bars(x = ~Income, y=~Multi_adult, width=~Width, 
+               legendgroup = "Multi-adult", name="Multi-adult", 
+               color=I(hhtypePalette["Multi-adult"])) %>%
+      add_bars(x = ~Income, y=~Multi_adult_with_children, width=~Width, 
+               legendgroup = "Multi-adult with children", name="Multi-adult with children", 
+               color=I(hhtypePalette["Multi-adult with children"])) %>%
+      add_bars(x = ~Income, y=~Single, width=~Width, 
+               legendgroup = "Single", name="Single", 
+               color=I(hhtypePalette["Single"])) %>%
+      add_bars(x = ~Income, y=~Single_with_children, width=~Width, 
+               legendgroup = "Single with children", name="Single with children",
+               color=I(hhtypePalette["Single with children"])) %>%
+      add_bars(x = ~Income, y=~Multi_adult_65, width=~Width, 
+               legendgroup = "Multi-adult 65+", name="Multi-adult 65+",
+               color=I(hhtypePalette["Multi-adult, 65+"])) %>%
+      add_bars(x = ~Income, y=~Single_65, width=~Width, 
+               legendgroup = "Single 65+", name="Single 65+", 
+               color=I(hhtypePalette["Single, 65+"])) %>%
+    layout(barmode="stack", 
+           annotations = list(x = 0.1 , y = 0.9, 
+                              text = plot_title, 
+                              showarrow = F, xref='paper', yref='paper'),
+           xaxis=list(type="log", 
+                        ticktext = list("$10k", "$20k", "$40k", "$80k", "$160k"), 
+                        tickvals = list(10000, 20000, 40000, 80000, 160000),
+                        tickmode = "array", 
+                        hoverformat = '$,.0f'), 
+             yaxis=list(title="Number of people",
+                        hoverformat = ',.0f'))
+  return(p)
+  }
+
+########################
+# Plots
+########################
+
+bhc_2007 <- plot_bars_hhtype(data_bhc, "2007", "BHC, 2007", TRUE)
+bhc_2014 <- plot_bars_hhtype(data_bhc, "2014", "BHC, 2014")
+bhc_2021 <- plot_bars_hhtype(data_bhc, "2021", "BHC, 2021")
+ahc_2007 <- plot_bars_hhtype(data_ahc, "2007-2009", "AHC, 2007-2009")
+ahc_2014 <- plot_bars_hhtype(data_ahc, "2013-2015", "AHC, 2013-2015")
+ahc_2021 <- plot_bars_hhtype(data_ahc, "2021", "AHC, 2021")
+
+ 
+subplot(ahc_2007, bhc_2007, 
+        ahc_2014, bhc_2014, 
+        ahc_2021, bhc_2021, 
+        shareX = T, shareY=T, nrows=3)
+
+
+
+```
+
+### Trends in BHC income between 2007 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+plot_data <- histograms_BHC[Group_type == "HH_Type" & Value_type == "HEDI_BHC_2022dollars"]
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_children := "No children"]
+plot_data[Group %like% "children", HH_children := "Children"]
+plot_data[Group %like% "65+", HH_children := "65+"]
+
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+add_income_bands(plot_data)
+
+p <- 
+  ggplot(plot_data, 
+       aes(x=Income, 
+           y=Proportion,
+           color=Year, 
+           group=Year, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_line(alpha=0.3) + 
+  geom_line(data=plot_data[Year %in% c(2007, 2014, 2021)],
+            alpha=1, 
+            size=1) + 
+  facet_grid(HH_adults~HH_children, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI, BHC ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Change in HEDI (BHC) distribution between 2007, 2014, and 2021, by household type")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+### Trends in AHC income between 2007 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+plot_data <- histograms_AHC[Group_type == "HH_Type" & Value_type == "HEDI_AHC_2022dollars"]
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_children := "No children"]
+plot_data[Group %like% "children", HH_children := "Children"]
+plot_data[Group %like% "65+", HH_children := "65+"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+add_income_bands(plot_data)
+
+p <- 
+  ggplot(plot_data, 
+       aes(x=Income, 
+           y=Proportion,
+           color=Year, 
+           group=Year,
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_line(alpha=0.3) + 
+  geom_line(data = plot_data[Year %in% c(2007, 2014, 2021)],
+            alpha=1, 
+            size=1) + 
+  facet_grid(HH_adults~HH_children, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 200000), 
+                name="HEDI, AHC ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Change in HEDI (AHC) distribution between 2007, 2014, and 2021, by household type")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+
+```
+
+
+### Seven year change in BHC income between 2014 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+Change_BHC <- sevenyear_comparisons(histograms_BHC[Group_type=="HH_Type" & 
+                                                     Value_type == "HEDI_BHC_2022dollars"], 
+                                type="Year")
+Change_BHC[, ':=' (Income = exp(Income), 
+                   Year = factor(Year))]
+add_income_bands(Change_BHC)
+
+p <- 
+  ggplot(Change_BHC[Year != 2007], 
+         aes(x=Income, 
+             y= Diff_prop_population, 
+             color=Year,
+             group=Year,
+             text = paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Diff_prop_population,3), scientific=FALSE), " pp",
+                         "\nYear : ", Year_group))) +
+    geom_step(size=1) +
+    geom_hline(yintercept = 0) + 
+    facet_grid(.~Group) + 
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+    scale_y_continuous(name="Change in proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 200000), 
+                  name="HEDI, BHC ($2022, log scale)") + 
+    scale_color_manual(name="",values=yearsPalette[c( '2014', '2021')])+  
+    ggtitle("Before housing cost")
+
+
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+
+
+### Seven year change in AHC income between 2014 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+Change_AHC <- sevenyear_comparisons(histograms_AHC[Group_type =="HH_Type" & 
+                                                     Value_type == "HEDI_AHC_2022dollars"], 
+                                type="Year_group")
+Change_AHC[, ':=' (Income = exp(Income), 
+                   Year = factor(Year))]
+add_income_bands(Change_AHC)
+
+
+p <- 
+  ggplot(Change_AHC[Year != 2007], 
+         aes(x=Income, 
+             y= Diff_prop_population, 
+             color=Year,
+             group=Year,
+             text = paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Diff_prop_population,3), scientific=FALSE), " pp",
+                         "\nYear : ", Year_group))) +
+    geom_step(size=1) +
+    geom_hline(yintercept = 0) + 
+    facet_grid(.~Group) + 
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+    scale_y_continuous(name="Change in proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 200000), 
+                  name="HEDI, BHC ($2022, log scale)") + 
+    scale_color_manual(name="",values=yearsPalette[c( '2014', '2021')])+  
+    ggtitle("After housing cost")
+
+
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+
+
+
+
+
+### Medians
+
+```{r echo=FALSE, warning=FALSE}
+# load deciles in $2022 
+BHC_deciles <- 
+  quantiles[Quantile %in% c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9) & 
+              Group_type == "HH_Type" & Value_type == "HEDI_BHC_2022dollars" ]
+
+AHC_deciles <- 
+  quantiles_AHC[Quantile %in% c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)  & 
+                 Group_type == "HH_Type" & Value_type == "HEDI_AHC_2022dollars" ]
+
+deciles <- rbind(BHC_deciles[, ':=' (Income_type = "BHC", 
+                                     Index = NULL, 
+                                     Statistic = paste("Decile", 10 * Quantile))], 
+                 AHC_deciles[, ':=' (Income_type = "AHC", 
+                                     Index = NULL, 
+                                     Statistic = paste("Decile", 10 * Quantile))], 
+                 fill=T)
+deciles <- deciles[, .(Year, Income_type, Statistic, Value, Group)]
+
+p <- plot_medians(deciles)
+p
+```
+
+### Inequality
+
+Small sample sizes for some groups result in noisy data. Use the zoom feature to focus in on the group you are interested in.
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_inequality_metrics(deciles)
+
+```
+
+### Average change in deciles
+```{r echo=FALSE, warning=FALSE}
+average_annual_change_deciles(deciles)
+```
+
+
+## Composition of population over time {.tabset}
+
+### By Household type
+
+```{r echo=FALSE, warning=FALSE, fig.width=8, fig.height=3}
+
+totals <-  histograms_BHC[Group_type %in% "HH_Type" & 
+                            Value_type == "HEDI_BHC_2022dollars",
+                      .(Population = max(Pi)), 
+                      by = .(Year, Group)]
+
+p1 <- ggplot(totals, 
+       aes(x=Year, 
+           y=Population, 
+           color=Group)) +
+  geom_line() +
+  theme_bw() +
+  scale_y_continuous(limits=c(0,NA),
+                     labels=comma, 
+                     name="Number of people") + 
+  scale_color_manual(name="",
+                     values=hhtypePalette) + 
+  ggtitle("Household type")
+
+ggplotly(p1)
+
+```
+
+### By age of the oldest
+
+```{r echo=FALSE, warning=FALSE, fig.width=8, fig.height=3}
+
+totals <-  histograms_BHC[Group_type== "HH_Oldest" & Value_type == "HEDI_BHC_2022dollars", 
+                          .(Population = max(Pi)), 
+                          by = .(Year, Group)]
+
+
+p2 <- 
+  ggplot(totals, 
+       aes(x=Year, 
+           y=Population, 
+           color=Group)) +
+  geom_line() +
+  theme_bw() +
+  scale_y_continuous(limits=c(0,NA),
+                     labels=comma, 
+                     name="Number of people")+ 
+  scale_color_discrete(name="") + 
+  ggtitle("Age of oldest in household")
+
+
+ggplotly(p2)
+
+```
+
+### By age of the youngest
+
+```{r echo=FALSE, warning=FALSE, fig.width=8, fig.height=3}
+
+totals <-  histograms_BHC[Group_type== "HH_Youngest" & 
+                            Value_type == "HEDI_BHC_2022dollars", 
+                          .(Population = max(Pi)), 
+                          by = .(Year, Group)]
+
+totals[Group == "3-Apr", Group:="3-4"]
+totals[Group == "5-Nov", Group:="3-11"]
+
+p <- 
+  ggplot(totals, 
+       aes(x=Year, 
+           y=Population, 
+           color=Group)) +
+  geom_line() +
+  theme_bw() +
+  scale_y_continuous(limits=c(0,NA),
+                     labels=comma, 
+                     name="Number of people")+ 
+  scale_color_discrete(name="") + 
+  ggtitle("Age of youngest in household")
+
+
+ggplotly(p)
+
+```
+
+### By birth year of the oldest in household
+
+```{r echo=FALSE, warning=FALSE, fig.width=8, fig.height=3}
+
+totals <-  histograms_BHC[Group_type== "HH_BirthYear" & 
+                            Value_type == "HEDI_BHC_2022dollars", 
+                          .(Population = max(Pi)), 
+                          by = .(Year, Group)]
+p <- 
+  ggplot(totals, 
+       aes(x=Year, 
+           y=Population, 
+           color=Group)) +
+  geom_line() +
+  theme_bw() +
+  scale_y_continuous(limits=c(0,NA),
+                     labels=comma, 
+                     name="Number of people")+ 
+  scale_color_discrete(name="") + 
+  ggtitle("Birth year of oldest in household")
+
+
+ggplotly(p)
+
+```
+
+
+### By age of youngest child and household type
+
+```{r echo=FALSE, warning=FALSE, fig.width=8, fig.height=3}
+
+totals <-  histograms_BHC[Group_type== "HH_Children_Type" & 
+                            Value_type == "HEDI_BHC_2022dollars", 
+                          .(Population = max(Pi)), 
+                          by = .(Year, Group)]
+p <- 
+  ggplot(totals[Group != ""], 
+       aes(x=Year, 
+           y=Population, 
+           color=Group)) +
+  geom_line() +
+  theme_bw() +
+  scale_y_continuous(limits=c(0,NA),
+                     labels=comma, 
+                     name="Number of people")+ 
+  scale_color_discrete(name="") + 
+  ggtitle("Age of youngest child and household type")
+
+
+ggplotly(p)
+
+```
+
+
+### By beneficiary status
+
+```{r echo=FALSE, warning=FALSE, fig.width=8, fig.height=3}
+
+totals <-  histograms_BHC[Group_type== "HH_Ben_Type" & 
+                            Value_type == "HEDI_BHC_2022dollars", 
+                          .(Population = max(Pi)), 
+                          by = .(Year, Group)]
+p <- 
+  ggplot(totals, 
+       aes(x=Year, 
+           y=Population, 
+           color=Group)) +
+  geom_line() +
+  theme_bw() +
+  scale_y_continuous(limits=c(0,NA),
+                     labels=comma, 
+                     name="Number of people")+ 
+  scale_color_discrete(name="") + 
+  ggtitle("Beneficiary status and household type")
+
+
+ggplotly(p)
+
+```
+
+
+
+
+
+
+
+
+## Counterfactual - 2007 age compositions {.tabset}
+These figures compare the distributions to counterfactuals that are based on the 2007 "Age of oldest" compositions. This isolates the impact of the changing age distribution from other changes. 
+
+### Comparing BHC distributions based on age of oldest in the household
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- histograms_BHC[Group_type == "HH_Oldest" & 
+                              Value_type == "HEDI_BHC_2022dollars"]
+
+Composition_2007 <- plot_data[Year == 2007, 
+                              .(Group_Total_2007 = max(Group_Total), 
+                                All_Total_2007 = max(All_Total)), 
+                              by = .(Year, Group)]
+plot_data <- merge(plot_data, 
+                   Composition_2007[, .(Group, 
+                                        Group_Total_2007, 
+                                        All_Total_2007)], 
+                   by = "Group")
+plot_data[, Adjust := Group_Total_2007/Group_Total]
+
+
+plot_data_details <- 
+  rbind(plot_data[, .(Group, Year, Income, 
+                      Population, 
+                      All_Total, 
+                      Group_Total,
+                      Type="Actual",
+                      Value_type = "HEDI_BHC_2022dollars")],
+        plot_data[, .(Group, Year, Income, 
+                      Population=Population*Adjust,
+                      All_Total=All_Total_2007,
+                      Group_Total=Group_Total_2007,
+                      Type="Counterfactual",
+                      Value_type = "HEDI_BHC_2022dollars")])
+
+plot_data_details[, ':=' (Income = exp(Income), 
+                          Proportion = Population/All_Total, 
+                          Year = factor(Year))]
+add_income_bands(plot_data_details)
+
+
+p <- 
+  ggplot(plot_data_details[Year %in% c(2007, 2014, 2021)], 
+         aes(x=Income, 
+             y=Proportion, 
+             color=Year,
+             group=paste(Year,Type), 
+             linetype=Type,
+             text = paste0("Income band : ", Income_band, 
+                           "\nProportion : ", percent(Proportion, accuracy=0.01),
+                           "\nYear : ", Year, 
+                           "\n", Type))) + 
+  geom_line() + 
+  facet_wrap(Group~.) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.spacing.y = unit(2, "line")) + 
+  scale_y_continuous(name="% of people", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = paste0(dollar(c(10, 20, 40, 80, 160)), "k"), 
+                limits=c(5000, 250000), 
+                name="BHC household equivalised disposable income ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette[c("2007", "2014", "2021")])+  
+  ggtitle("Comparing to 2007 age counterfactual, by age of oldest")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20), 
+         legend=list(font=list(size=10)))
+
+```
+
+### BHC distribution - Difference to counterfactual based on age of oldest in the household
+
+```{r echo=FALSE, warning=FALSE}
+
+change <- merge( plot_data_details[Year == 2021 & Type == "Actual"],
+                 plot_data_details[Year == 2021 & Type != "Actual"], 
+                 by = c("Group", "Year", "Income", "Income_band"))
+change[, Difference := Proportion.x-Proportion.y ]
+change[, Label := paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Difference,3), scientific=FALSE), " pp",
+                         "\nAge of oldest : ", Group)]
+
+p <- 
+  ggplot(change, 
+       aes(x=Income, 
+           y=Difference,
+           color=Group,
+           group=Group,
+           text=Label)) +
+  geom_step() + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  scale_y_continuous(name="Change in proportion of people", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="BHC household equivalised disposable income ($2022, log scale)") + 
+  scale_color_discrete(name="Age of oldest in household")+  
+  ggtitle("Proportion of population in 2021 compared to 2007 counterfactual")
+
+ggplotly(p, tooltip="text") %>% 
+  layout(font=list(size = 20), 
+         legend=list(font=list(size=10)))
+
+```
+
+
+### Comparing full BHC distribution to counterfactual
+
+```{r echo=FALSE, warning=FALSE}
+
+temp <- plot_data_details[, .(Proportion = sum(Proportion)), 
+                          by  = .(Year, Income, Type, Income_band)]
+temp[, Label := paste0("Income band : ", Income_band,
+                           "\nProportion : ", percent(Proportion, accuracy=0.01),
+                           "\nYear : ", Year,
+                           "\n", Type)]
+# plot for AN
+p <- 
+  ggplot(temp[Year %in% c(2007, 2021)], 
+       aes(x=Income, 
+           y=Proportion,
+           color=Type,
+           group=Type,
+           text=Label
+           )) + 
+  geom_step() + 
+  facet_wrap(Year~.) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        legend.position="top") + 
+  scale_y_continuous(name="Proportion of people", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="Household equivalised disposable income ($2022, log scale)") + 
+  scale_color_discrete(name="")+ 
+  ggtitle("BHC HEDI distribution in 2007 and 2021, age counterfactual")
+
+p <- 
+  ggplot(temp[Year %in% c(2007, 2014, 2021)], 
+       aes(x=Income, 
+           y=Proportion,
+           color=Type,
+           group=Type,
+           text=Label
+           )) + 
+  geom_step() + 
+  facet_wrap(Year~.) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        legend.position="top") + 
+  scale_y_continuous(name="Proportion of people", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="Household equivalised disposable income ($2022, log scale)") + 
+  scale_color_discrete(name="")+ 
+  ggtitle("Change in BHC HEDI distribution between 2007, 2014, and 2021 impact of age compositions")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20), 
+         legend=list(font=list(size=10)))
+
+```
+
+
+### Comparing AHC distributions based on age of oldest in the household
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- histograms_AHC[Group_type == "HH_Oldest" & 
+                              Value_type == "HEDI_AHC_2022dollars"]
+
+Composition_2007 <- plot_data[Year_group == "2007-2009", 
+                              .(Group_Total_2007 = max(Group_Total), 
+                                All_Total_2007 = max(All_Total)), 
+                              by = .(Year_group, Group)]
+plot_data <- merge(plot_data, 
+                   Composition_2007[, .(Group, 
+                                        Group_Total_2007, 
+                                        All_Total_2007)], 
+                   by = "Group")
+plot_data[, Adjust := Group_Total_2007/Group_Total]
+
+plot_data_details <- 
+  rbind(plot_data[, .(Group, Year_group, Year,
+                      Income, 
+                      Population, 
+                      All_Total, 
+                      Group_Total,
+                      Type="Actual",
+                      Value_type = "HEDI_AHC_2022dollars")],
+        plot_data[, .(Group, Year_group, Year,
+                      Income, 
+                      Population=Population*Adjust,
+                      All_Total=All_Total_2007,
+                      Group_Total=Group_Total_2007,
+                      Type="Counterfactual",
+                      Value_type = "HEDI_AHC_2022dollars")])
+
+plot_data_details[, ':=' (Income = exp(Income), 
+                          Proportion = Population/All_Total, 
+                          Year = factor(Year))]
+add_income_bands(plot_data_details)
+
+
+p <- 
+  ggplot(plot_data_details[Year_group %in% c("2007-2009", "2013-2015", "2021")], 
+         aes(x=Income, 
+             y=Proportion, 
+             color=Year,
+             group=paste(Year_group,Type), 
+             linetype=Type,
+             text = paste0("Income band : ", Income_band, 
+                           "\nProportion : ", percent(Proportion, accuracy=0.01),
+                           "\nYear : ", Year_group, 
+                           "\n", Type))) + 
+  geom_line() + 
+  facet_wrap(Group~.) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.spacing.y = unit(2, "line")) + 
+  scale_y_continuous(name="% of people", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = paste0(dollar(c(10, 20, 40, 80, 160)), "k"), 
+                limits=c(5000, 200000), 
+                name="AHC household equivalised disposable income ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Comparing to 2007 age counterfactual, by age of oldest")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20), 
+         legend=list(font=list(size=10)))
+
+
+```
+
+### AHC distribution - Difference to counterfactual based on age of oldest in the household
+
+```{r echo=FALSE, warning=FALSE}
+
+change <- merge( plot_data_details[Year_group == "2021" & Type == "Actual"],
+                 plot_data_details[Year_group == "2021" & Type != "Actual"], 
+                 by = c("Group", "Year_group", "Income", "Income_band"))
+
+change[, Difference := Proportion.x-Proportion.y ]
+change[, Label := paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Difference,3), scientific=FALSE), " pp",
+                         "\nAge of oldest : ", Group)]
+
+p <- 
+  ggplot(change, 
+       aes(x=Income, 
+           y=Difference,
+           color=Group,
+           group=Group,
+           text=Label)) +
+  geom_step() + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  scale_y_continuous(name="Change in proportion of people", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 200000), 
+                name="AHC household equivalised disposable income ($2022, log scale)") + 
+  scale_color_discrete(name="Age of oldest in household")+  
+  ggtitle("Proportion of population in 2021 compared to 2007 counterfactual")
+
+ggplotly(p, tooltip="text") %>% 
+  layout(font=list(size = 20), 
+         legend=list(font=list(size=10)))
+
+```
+
+### Comparing full AHC distribution to counterfactual
+
+```{r echo=FALSE, warning=FALSE}
+
+temp <- plot_data_details[, .(Proportion = sum(Proportion)), 
+                          by  = .(Year_group, Income, Type, Income_band)]
+temp[, Label := paste0("Income band : ", Income_band,
+                       "\nProportion : ", percent(Proportion, accuracy=0.01),
+                       "\nYear : ", Year_group,
+                       "\n", Type)]
+
+p <- 
+  ggplot(temp[Year_group %in% c("2007-2009", "2013-2015", "2021")], 
+       aes(x=Income, 
+           y=Proportion,
+           color=Type,
+           group=Type,
+           text=Label
+           )) + 
+  geom_step() + 
+  facet_wrap(Year_group~.) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        legend.position="top") + 
+  scale_y_continuous(name="Proportion of people", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="AHC household equivalised disposable income ($2022, log scale)") + 
+  scale_color_discrete(name="")+ 
+  ggtitle("Change in AHC HEDI distribution between 2007, 2014, and 2021 impact of age compositions")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20), 
+         legend=list(font=list(size=10)))
+
+```
+
+
+
+
+
+
+
+
+
+
+## Beneficiary status {.tabset}
+
+### Working age households without children {.tabset}
+
+#### Distributions in 2007, 2014, 2021
+
+
+```{r echo=FALSE, warning=FALSE}
+########################
+# prepare plot data
+########################
+data_bhc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   Year %in% c(2007, 2014, 2021)]
+
+data_bhc[, Population := 100*Population/All_Total]
+data_bhc[, Year_group := paste(Year)]
+data_bhc <- dcast(data_bhc, Year_group + Income ~ Group, value.var="Population")
+data_bhc[, Income := exp(Income)]
+data_bhc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_bhc, 
+        gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_bhc)))))))
+
+data_ahc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") &
+                   Year %in% c(2007, 2014, 2021)]
+data_ahc[, Population := 100*Population/All_Total]
+data_ahc <- dcast(data_ahc, Year_group + Income ~ Group, value.var="Population")
+data_ahc[, Income := exp(Income)]
+setnames(data_ahc, 
+         gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_ahc)))))))
+
+########################
+# plot function
+########################
+plot_lines_hhbentype_nochildren <- function(data_to_plot, year, plot_title, show_legend=F){
+  p <- 
+    plot_ly(data_to_plot[Year_group==year & Income>=1000],
+            showlegend=show_legend) %>% 
+      add_lines(x = ~Income, y=~Beneficiary__Multi_adult, 
+               legendgroup =  "Beneficiary__Multi_adult", 
+               name="Beneficiary : Multi_adult", 
+               color=I(hhbentypePalette["Beneficiary : Multi-adult"])) %>%
+      add_lines(x = ~Income, y=~Non_beneficiary__Multi_adult, 
+               legendgroup =  "Non_beneficiary__Multi_adult", 
+               name="Non-beneficiary : Multi-adult", 
+               color=I(hhbentypePalette["Non beneficiary : Multi-adult"])) %>% 
+      add_lines(x = ~Income, y=~Beneficiary__Single, 
+               legendgroup =  "Beneficiary__Single", 
+               name="Beneficiary : Single", 
+               color=I(hhbentypePalette["Beneficiary : Single"])) %>%
+      add_lines(x = ~Income, y=~Non_beneficiary__Single, 
+               legendgroup =  "Non_beneficiary__Single", 
+               name="Non-beneficiary : Single", 
+               color=I(hhbentypePalette["Non beneficiary : Single"])) %>%
+      layout(annotations = list(x = 0.1 , y = 0.9, 
+                                text = plot_title, 
+                                showarrow = F, xref='paper', yref='paper'),
+             xaxis=list(type="log", 
+                        ticktext = list("$10k", "$20k", "$40k", "$80k", "$160k"), 
+                        tickvals = list(10000, 20000, 40000, 80000, 160000),
+                        tickmode = "array", 
+                        hoverformat = '$,.0f'), 
+             yaxis=list(title="% of people", 
+                        ticksuffix = "%",
+                        hoverformat = ".1f"))
+  return(p)
+}
+
+########################
+# plots
+########################
+bhc_2007 <- plot_lines_hhbentype_nochildren(data_bhc, "2007", "BHC, 2007", TRUE)
+bhc_2014 <- plot_lines_hhbentype_nochildren(data_bhc, "2014", "BHC, 2014")
+bhc_2021 <- plot_lines_hhbentype_nochildren(data_bhc, "2021", "BHC, 2021")
+ahc_2007 <- plot_lines_hhbentype_nochildren(data_ahc, "2007-2009", "AHC, 2007-2009")
+ahc_2014 <- plot_lines_hhbentype_nochildren(data_ahc, "2013-2015", "AHC, 2013-2015")
+ahc_2021 <- plot_lines_hhbentype_nochildren(data_ahc, "2021", "AHC, 2021")
+
+
+subplot(ahc_2007, bhc_2007, 
+        ahc_2014, bhc_2014, 
+        ahc_2021, bhc_2021, 
+        shareX = T, shareY=T, nrows=3)
+
+```
+
+#### Number of people by household type and income
+
+```{r echo=FALSE, warning=FALSE}
+
+########################
+# prepare plot data
+########################
+
+data_bhc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   Year %in% c(2007, 2014, 2021)]
+data_bhc[, Year_group := paste(Year)]
+data_bhc <- dcast(data_bhc, Year_group + Income ~ Group, value.var="Population")
+data_bhc[, Income := exp(Income)]
+data_bhc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_bhc, 
+        gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_bhc)))))))
+
+data_ahc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") &
+                   Year %in% c(2007, 2014, 2021)]
+data_ahc[Year_group %in% c("2007-2009","2013-2015"), Population := Population/3]
+data_ahc <- dcast(data_ahc, Year_group + Income ~ Group, value.var="Population")
+data_ahc[, Income := exp(Income)]
+
+data_ahc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_ahc, 
+         gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_ahc)))))))
+
+########################
+# plot function
+########################\
+
+plot_bars_hhbentype_nochildren <- function(data_to_plot, year, plot_title, show_legend=F){
+  p <- 
+    plot_ly(data_to_plot[Year_group==year & Income>=1000],
+            showlegend=show_legend) %>% 
+      add_bars(x = ~Income, y=~Beneficiary__Multi_adult, width=~Width, 
+               legendgroup =  "Beneficiary__Multi_adult", 
+               name="Beneficiary : Multi_adult", 
+               color=I(hhbentypePalette["Beneficiary : Multi-adult"])) %>%
+      add_bars(x = ~Income, y=~Non_beneficiary__Multi_adult, width=~Width,  
+               legendgroup =  "Non_beneficiary__Multi_adult", 
+               name="Non-beneficiary : Multi-adult", 
+               color=I(hhbentypePalette["Non beneficiary : Multi-adult"])) %>% 
+      add_bars(x = ~Income, y=~Beneficiary__Single, width=~Width,  
+               legendgroup =  "Beneficiary__Single", 
+               name="Beneficiary : Single", 
+               color=I(hhbentypePalette["Beneficiary : Single"])) %>%
+      add_bars(x = ~Income, y=~Non_beneficiary__Single, width=~Width,  
+               legendgroup =  "Non_beneficiary__Single", 
+               name="Non-beneficiary : Single", 
+               color=I(hhbentypePalette["Non beneficiary : Single"])) %>%
+    layout(barmode="stack", 
+           annotations = list(x = 0.1 , y = 0.9, 
+                              text = plot_title, 
+                              showarrow = F, xref='paper', yref='paper'),
+           xaxis=list(type="log", 
+                        ticktext = list("$10k", "$20k", "$40k", "$80k", "$160k"), 
+                        tickvals = list(10000, 20000, 40000, 80000, 160000),
+                        tickmode = "array", 
+                        hoverformat = '$,.0f'), 
+             yaxis=list(title="Number of people", 
+                        hoverformat = ',.0f'))
+  return(p)
+}
+
+########################
+# Plots
+########################
+
+bhc_2007 <- plot_bars_hhbentype_nochildren(data_bhc, "2007", "BHC, 2007", TRUE)
+bhc_2014 <- plot_bars_hhbentype_nochildren(data_bhc, "2014", "BHC, 2014")
+bhc_2021 <- plot_bars_hhbentype_nochildren(data_bhc, "2021", "BHC, 2021")
+ahc_2007 <- plot_bars_hhbentype_nochildren(data_ahc, "2007-2009", "AHC, 2007-2009")
+ahc_2014 <- plot_bars_hhbentype_nochildren(data_ahc, "2013-2015", "AHC, 2013-2015")
+ahc_2021 <- plot_bars_hhbentype_nochildren(data_ahc, "2021", "AHC, 2021")
+
+ 
+subplot(ahc_2007, bhc_2007, 
+        ahc_2014, bhc_2014, 
+        ahc_2021, bhc_2021, 
+        shareX = T, shareY=T, nrows=3)
+
+
+
+```
+
+#### Trends in BHC income between 2007 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+plot_data <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   !(Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+p <- 
+  ggplot(plot_data, 
+       aes(x=Income, 
+           y=Proportion,
+           color=Year, 
+           group=Year, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_line(alpha=0.3) + 
+  geom_line(data=plot_data[Year %in% c(2007, 2014, 2021)],
+            alpha=1, 
+            size=1) + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI, BHC ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Households without children\nChange in HEDI (BHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+#### BHC income 2007, 2014, and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   !(Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+
+p <- 
+  ggplot(plot_data[Year %in% c(2007, 2014, 2021)], 
+       aes(x=Income, 
+           y=Proportion,
+           fill=Year, 
+           group=Year, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_col(alpha=0.5, position="identity") + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI, BHC ($2022, log scale)") + 
+    scale_fill_manual(name="",values=yearsPalette[c('2007', '2014', '2021')])+  
+  ggtitle("Households without children - Change in HEDI (BHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+```
+  
+#### Trends in AHC income between 2007 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+plot_data <-   
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   !(Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+p <- 
+  ggplot(plot_data, 
+       aes(x=Income, 
+           y=Proportion,
+           color=Year, 
+           group=Year,
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_line(alpha=0.3) + 
+  geom_line(data = plot_data[Year %in% c(2007, 2014, 2021)],
+            alpha=1, 
+            size=1) + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 200000), 
+                name="HEDI, AHC ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Households without children\nChange in HEDI (AHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+
+```
+
+
+#### AHC income 2007, 2014, and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   !(Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+
+p <- 
+  ggplot(plot_data[Year %in% c(2007, 2014, 2021)], 
+       aes(x=Income, 
+           y=Proportion,
+           fill=Year, 
+           group=Year, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_col(alpha=0.5, position="identity") + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI, BHC ($2022, log scale)") + 
+    scale_fill_manual(name="",values=yearsPalette[c('2007', '2014', '2021')])+  
+  ggtitle("Households without children - Change in HEDI (AHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+```
+
+
+#### Seven year change in BHC income between 2014 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+Change_BHC <- sevenyear_comparisons(  
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   !(Group %like% "children")], 
+  type="Year")
+
+Change_BHC[, ':=' (Income = exp(Income), 
+                   Year = factor(Year))]
+
+add_income_bands(Change_BHC)
+
+p <- 
+  ggplot(Change_BHC[Year != 2007], 
+         aes(x=Income, 
+             y= Diff_prop_population, 
+             color=Year,
+             group=Year,
+             text = paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Diff_prop_population,3), scientific=FALSE), " pp",
+                         "\nYear : ", Year_group))) +
+    geom_step(size=1) +
+    geom_hline(yintercept = 0) + 
+    facet_wrap(.~Group) + 
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+    scale_y_continuous(name="Change in proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 200000), 
+                  name="HEDI, BHC ($2022, log scale)") + 
+    scale_color_manual(name="",values=yearsPalette[c( '2014', '2021')])+  
+    ggtitle("Before housing cost")
+
+
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+#### Seven year change in AHC income between 2014 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+Change_AHC <- 
+  sevenyear_comparisons(  
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   !(Group %like% "children")], 
+  type="Year_group")
+
+Change_AHC[, ':=' (Income = exp(Income), 
+                   Year = factor(Year))]
+add_income_bands(Change_AHC)
+
+
+p <- 
+  ggplot(Change_AHC[Year != 2007], 
+         aes(x=Income, 
+             y= Diff_prop_population, 
+             color=Year,
+             group=Year,
+             text = paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Diff_prop_population,3), scientific=FALSE), " pp",
+                         "\nYear : ", Year_group))) +
+    geom_step(size=1) +
+    geom_hline(yintercept = 0) + 
+    facet_wrap(.~Group) + 
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+    scale_y_continuous(name="Change in proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 200000), 
+                  name="HEDI, BHC ($2022, log scale)") + 
+    scale_color_manual(name="",values=yearsPalette[c( '2014', '2021')])+  
+    ggtitle("After housing cost")
+
+
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+```
+
+
+
+
+
+
+
+### Medians
+```{r echo=FALSE, warning=FALSE}
+# load deciles in $2022 
+BHC_deciles <- 
+  quantiles[Quantile %in% c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9) & 
+              Group_type == "HH_Ben_Type" & Value_type == "HEDI_BHC_2022dollars" ]
+
+AHC_deciles <- 
+  quantiles_AHC[Quantile %in% c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)  & 
+                 Group_type == "HH_Ben_Type" & Value_type == "HEDI_AHC_2022dollars" ]
+
+deciles <- rbind(BHC_deciles[, ':=' (Income_type = "BHC", 
+                                     Index = NULL, 
+                                     Statistic = paste("Decile", 10 * Quantile))], 
+                 AHC_deciles[, ':=' (Income_type = "AHC", 
+                                     Index = NULL, 
+                                     Statistic = paste("Decile", 10 * Quantile))], 
+                 fill=T)
+deciles <- deciles[, .(Year, Income_type, Statistic, Value, Group)]
+
+p <- plot_medians(deciles[!(Group %like% "children")])
+p
+```
+### Inequality
+
+
+Small sample sizes for some groups result in noisy data. Use the zoom feature to focus in on the group you are interested in.
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_inequality_metrics(deciles[!(Group %like% "children")])
+
+```
+### Average change in deciles
+```{r echo=FALSE, warning=FALSE}
+average_annual_change_deciles(deciles[!(Group %like% "children")])
+```
+
+### Working age households with children {.tabset}
+
+#### Distributions in 2007, 2014, 2021
+
+
+```{r echo=FALSE, warning=FALSE}
+########################
+# prepare plot data
+########################
+data_bhc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   Year %in% c(2007, 2014, 2021)]
+
+data_bhc[, Population := 100*Population/All_Total]
+data_bhc[, Year_group := paste(Year)]
+data_bhc <- dcast(data_bhc, Year_group + Income ~ Group, value.var="Population")
+data_bhc[, Income := exp(Income)]
+data_bhc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_bhc, 
+        gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_bhc)))))))
+
+data_ahc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") &
+                   Year %in% c(2007, 2014, 2021)]
+data_ahc[, Population := 100*Population/All_Total]
+data_ahc <- dcast(data_ahc, Year_group + Income ~ Group, value.var="Population")
+data_ahc[, Income := exp(Income)]
+setnames(data_ahc, 
+         gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_ahc)))))))
+
+########################
+# plot function
+########################
+plot_lines_hhbentype_children <- function(data_to_plot, year, plot_title, show_legend=F){
+  p <- 
+    plot_ly(data_to_plot[Year_group==year & Income>=1000],
+            showlegend=show_legend) %>% 
+      add_lines(x = ~Income, y=~Beneficiary__Multi_adult_with_children, 
+               legendgroup =  "Beneficiary__Multi_adult_with_children", 
+               name="Beneficiary : Multi_adult_with_children", 
+               color=I(hhbentypePalette["Beneficiary : Multi-adult with children"])) %>%
+      add_lines(x = ~Income, y=~Non_beneficiary__Multi_adult, 
+               legendgroup =  "Non_beneficiary__Multi_adult_with_children", 
+               name="Non-beneficiary : Multi-adult_with_children", 
+               color=I(hhbentypePalette["Non beneficiary : Multi-adult with children"])) %>% 
+      add_lines(x = ~Income, y=~Beneficiary__Single, 
+               legendgroup =  "Beneficiary__Single_with_children", 
+               name="Beneficiary : Single_with_children", 
+               color=I(hhbentypePalette["Beneficiary : Single with children"])) %>%
+      add_lines(x = ~Income, y=~Non_beneficiary__Single_with_children, 
+               legendgroup =  "Non_beneficiary__Single_with_children", 
+               name="Non-beneficiary : Single with children", 
+               color=I(hhbentypePalette["Non beneficiary : Single with children"])) %>%
+      layout(annotations = list(x = 0.1 , y = 0.9, 
+                                text = plot_title, 
+                                showarrow = F, xref='paper', yref='paper'),
+             xaxis=list(type="log", 
+                        ticktext = list("$10k", "$20k", "$40k", "$80k", "$160k"), 
+                        tickvals = list(10000, 20000, 40000, 80000, 160000),
+                        tickmode = "array", 
+                        hoverformat = '$,.0f'), 
+             yaxis=list(title="% of people", 
+                        ticksuffix = "%",
+                        hoverformat = ".1f"))
+  return(p)
+}
+
+########################
+# plots
+########################
+bhc_2007 <- plot_lines_hhbentype_children(data_bhc, "2007", "BHC, 2007", TRUE)
+bhc_2014 <- plot_lines_hhbentype_children(data_bhc, "2014", "BHC, 2014")
+bhc_2021 <- plot_lines_hhbentype_children(data_bhc, "2021", "BHC, 2021")
+ahc_2007 <- plot_lines_hhbentype_children(data_ahc, "2007-2009", "AHC, 2007-2009")
+ahc_2014 <- plot_lines_hhbentype_children(data_ahc, "2013-2015", "AHC, 2013-2015")
+ahc_2021 <- plot_lines_hhbentype_children(data_ahc, "2021", "AHC, 2021")
+
+
+subplot(ahc_2007, bhc_2007, 
+        ahc_2014, bhc_2014, 
+        ahc_2021, bhc_2021, 
+        shareX = T, shareY=T, nrows=3)
+
+```
+
+#### Number of people by household type and income
+
+```{r echo=FALSE, warning=FALSE}
+
+########################
+# prepare plot data
+########################
+
+data_bhc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   Year %in% c(2007, 2014, 2021)]
+data_bhc[, Year_group := paste(Year)]
+data_bhc <- dcast(data_bhc, Year_group + Income ~ Group, value.var="Population")
+data_bhc[, Income := exp(Income)]
+data_bhc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_bhc, 
+        gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_bhc)))))))
+
+data_ahc <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") &
+                   Year %in% c(2007, 2014, 2021)]
+data_ahc[Year_group %in% c("2007-2009","2013-2015"), Population := Population/3]
+data_ahc <- dcast(data_ahc, Year_group + Income ~ Group, value.var="Population")
+data_ahc[, Income := exp(Income)]
+
+data_ahc[, Width := 0.99*c(diff(Income),0)]
+setnames(data_ahc, 
+         gsub(":", "", gsub("\\+","", gsub(",", "", gsub(" ", "_", gsub("-", "_", names(data_ahc)))))))
+
+########################
+# plot function
+########################\
+
+plot_bars_hhbentype_children <- function(data_to_plot, year, plot_title, show_legend=F){
+  p <- 
+    plot_ly(data_to_plot[Year_group==year & Income>=1000],
+            showlegend=show_legend) %>% 
+    
+      add_bars(x = ~Income, y=~Beneficiary__Multi_adult_with_children, width=~Width,  
+               legendgroup =  "Beneficiary__Multi_adult_with_children", 
+               name="Beneficiary : Multi_adult_with_children", 
+               color=I(hhbentypePalette["Beneficiary : Multi-adult with children"])) %>%
+      add_bars(x = ~Income, y=~Non_beneficiary__Multi_adult, 
+               legendgroup =  "Non_beneficiary__Multi_adult_with_children", width=~Width,   
+               name="Non-beneficiary : Multi-adult_with_children", 
+               color=I(hhbentypePalette["Non beneficiary : Multi-adult with children"])) %>% 
+      add_bars(x = ~Income, y=~Beneficiary__Single, width=~Width,   
+               legendgroup =  "Beneficiary__Single_with_children", 
+               name="Beneficiary : Single_with_children", 
+               color=I(hhbentypePalette["Beneficiary : Single with children"])) %>%
+      add_bars(x = ~Income, y=~Non_beneficiary__Single_with_children, width=~Width,   
+               legendgroup =  "Non_beneficiary__Single_with_children", 
+               name="Non-beneficiary : Single with children", 
+               color=I(hhbentypePalette["Non beneficiary : Single with children"])) %>%
+    layout(barmode="stack", 
+           annotations = list(x = 0.1 , y = 0.9, 
+                              text = plot_title, 
+                              showarrow = F, xref='paper', yref='paper'),
+           xaxis=list(type="log", 
+                        ticktext = list("$10k", "$20k", "$40k", "$80k", "$160k"), 
+                        tickvals = list(10000, 20000, 40000, 80000, 160000),
+                        tickmode = "array", 
+                        hoverformat = '$,.0f'), 
+             yaxis=list(title="Number of people", 
+                        hoverformat = ',.0f'))
+  return(p)
+}
+
+########################
+# Plots
+########################
+
+bhc_2007 <- plot_bars_hhbentype_children(data_bhc, "2007", "BHC, 2007", TRUE)
+bhc_2014 <- plot_bars_hhbentype_children(data_bhc, "2014", "BHC, 2014")
+bhc_2021 <- plot_bars_hhbentype_children(data_bhc, "2021", "BHC, 2021")
+ahc_2007 <- plot_bars_hhbentype_children(data_ahc, "2007-2009", "AHC, 2007-2009")
+ahc_2014 <- plot_bars_hhbentype_children(data_ahc, "2013-2015", "AHC, 2013-2015")
+ahc_2021 <- plot_bars_hhbentype_children(data_ahc, "2021", "AHC, 2021")
+
+ 
+subplot(ahc_2007, bhc_2007, 
+        ahc_2014, bhc_2014, 
+        ahc_2021, bhc_2021, 
+        shareX = T, shareY=T, nrows=3)
+
+
+```
+
+#### Trends in BHC income between 2007 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+plot_data <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   (Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+p <- 
+  ggplot(plot_data, 
+       aes(x=Income, 
+           y=Proportion,
+           color=Year, 
+           group=Year, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_line(alpha=0.3) + 
+  geom_line(data=plot_data[Year %in% c(2007, 2014, 2021)],
+            alpha=1, 
+            size=1) + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI, BHC ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Households with children - Change in HEDI (BHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+
+
+#### BHC income 2007, 2014, and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   (Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+
+p <- 
+  ggplot(plot_data[Year %in% c(2007, 2014, 2021)], 
+       aes(x=Income, 
+           y=Proportion,
+           fill=Year, 
+           group=Year, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_col(alpha=0.5, position="identity") + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI, BHC ($2022, log scale)") + 
+    scale_fill_manual(name="",values=yearsPalette[c('2007', '2014', '2021')])+  
+  ggtitle("Households with children - Change in HEDI (BHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+```
+
+#### Trends in BHC income between 2007 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+plot_data <-   
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   (Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+p <- 
+  ggplot(plot_data, 
+       aes(x=Income, 
+           y=Proportion,
+           color=Year, 
+           group=Year,
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_line(alpha=0.3) + 
+  geom_line(data = plot_data[Year %in% c(2007, 2014, 2021)],
+            alpha=1, 
+            size=1) + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 200000), 
+                name="HEDI, AHC ($2022, log scale)") + 
+  scale_color_manual(name="", 
+                     values=yearsPalette)+  
+  ggtitle("Households with children - Change in HEDI (AHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+
+```
+
+
+
+
+#### AHC income 2007, 2014, and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_data <- 
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   (Group %like% "children")]
+
+plot_data[, HH_adults := "Multi-adult"]
+plot_data[Group %like% "Single", HH_adults := "Single"]
+plot_data[, HH_benstatus := "Non beneficiary"]
+plot_data[Group %like% "Beneficiary", HH_benstatus := "Beneficiary"]
+
+plot_data[, ':=' (Income = exp(Income), 
+                  Proportion = Population/All_Total, 
+                  Year = factor(Year))]
+
+add_income_bands(plot_data)
+
+
+p <- 
+  ggplot(plot_data[Year %in% c(2007, 2014, 2021)], 
+       aes(x=Income, 
+           y=Proportion,
+           fill=Year, 
+           group=Year, 
+           text = paste0("Income band : ", Income_band, 
+                         "\nProportion : ", percent(Proportion, accuracy=0.01),
+                         "\nYear : ", Year))) + 
+  geom_col(alpha=0.5, position="identity") + 
+  facet_grid(HH_adults~HH_benstatus, scales="free") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+  scale_y_continuous(name="Proportion of people in income band", 
+                     labels=percent_format()) + 
+  scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                limits=c(5000, 250000), 
+                name="HEDI, AHC ($2022, log scale)") + 
+    scale_fill_manual(name="",values=yearsPalette[c('2007', '2014', '2021')])+  
+  ggtitle("Households with children - Change in HEDI (AHC) distribution by benefit receipt")
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+```
+
+#### Seven year change in BHC income between 2014 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+Change_BHC <- sevenyear_comparisons(  
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_BHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   (Group %like% "children")], 
+  type="Year")
+
+Change_BHC[, ':=' (Income = exp(Income), 
+                   Year = factor(Year))]
+
+add_income_bands(Change_BHC)
+
+p <- 
+  ggplot(Change_BHC[Year != 2007], 
+         aes(x=Income, 
+             y= Diff_prop_population, 
+             color=Year,
+             group=Year,
+             text = paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Diff_prop_population,3), scientific=FALSE), " pp",
+                         "\nYear : ", Year_group))) +
+    geom_step(size=1) +
+    geom_hline(yintercept = 0) + 
+    facet_wrap(.~Group) + 
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+    scale_y_continuous(name="Change in proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 200000), 
+                  name="HEDI, BHC ($2022, log scale)") + 
+    scale_color_manual(name="",values=yearsPalette[c( '2014', '2021')])+  
+    ggtitle("Before housing cost")
+
+
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+
+```
+
+#### Seven year change in AHC income between 2014 and 2021
+
+```{r echo=FALSE, warning=FALSE}
+
+Change_AHC <- 
+  sevenyear_comparisons(  
+  histograms_all[Group_type == "HH_Ben_Type" & 
+                   Value_type == "HEDI_AHC_2022dollars" & 
+                   !(Group %like% "65+") & 
+                   (Group %like% "children")], 
+  type="Year_group")
+
+Change_AHC[, ':=' (Income = exp(Income), 
+                   Year = factor(Year))]
+add_income_bands(Change_AHC)
+
+
+p <- 
+  ggplot(Change_AHC[Year != 2007], 
+         aes(x=Income, 
+             y= Diff_prop_population, 
+             color=Year,
+             group=Year,
+             text = paste0("Income band : ", Income_band, 
+                         "\nChange : ", format(round(Diff_prop_population,3), scientific=FALSE), " pp",
+                         "\nYear : ", Year_group))) +
+    geom_step(size=1) +
+    geom_hline(yintercept = 0) + 
+    facet_wrap(.~Group) + 
+    theme_bw() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF")) + 
+    scale_y_continuous(name="Change in proportion of people in this income band", 
+                       labels=percent_format()) + 
+    scale_x_log10(breaks = c(10000, 20000, 40000, 80000, 160000),
+                  labels = dollar(c(10000, 20000, 40000, 80000, 160000)), 
+                  limits=c(5000, 200000), 
+                  name="HEDI, BHC ($2022, log scale)") + 
+    scale_color_manual(name="",values=yearsPalette[c( '2014', '2021')])+  
+    ggtitle("After housing cost")
+
+
+
+ggplotly(p, tooltip="text") %>% 
+  layout_ggplotly() %>% 
+  layout(font=list(size = 20))
+
+```
+
+
+### Medians
+```{r echo=FALSE, warning=FALSE}
+p <- plot_medians(deciles[(Group %like% "children")])
+p
+```
+### Inequality
+
+Small sample sizes for some groups result in noisy data. Use the zoom feature to focus in on the group you are interested in.
+
+
+```{r echo=FALSE, warning=FALSE}
+
+plot_inequality_metrics(deciles[(Group %like% "children")])
+
+```
+### Average change in deciles
+```{r echo=FALSE, warning=FALSE}
+average_annual_change_deciles(deciles[(Group %like% "children")])
+```
+
+
+
